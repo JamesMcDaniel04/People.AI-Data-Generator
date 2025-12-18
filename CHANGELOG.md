@@ -58,8 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Thread-safe logging and state store for concurrent runs
+- Opportunity-level concurrency via `--concurrency`
+- Tag-mode run tagging on Event/Task creation
+- Reset cleanup for tag mode and external_state using `state.sqlite`
+- Config validation for date ranges and min/max bounds
+- Automatic `.env` loading in CLI
+
+### Changed
+- Scorecard scoring now uses template question counts
+- Scorecard generation guarantees at least one answer when coverage_target > 0
+- SOQL generation now escapes string literals and quotes dates
+
 ### Planned for 0.2.0
-- True parallel execution with ThreadPoolExecutor
 - Progress bars during runs
 - People.ai API verification
 - Additional scorecard templates (BANT, MEDDPICC)

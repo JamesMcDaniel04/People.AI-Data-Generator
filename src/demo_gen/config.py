@@ -1,18 +1,33 @@
 """Configuration schema and validation for demo-gen"""
 
-import os
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class DateRange(BaseModel):
     start: str
     end: str
+
+    @field_validator("start", "end")
+    def validate_date_format(cls, v: str) -> str:
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError("close_date_range must use YYYY-MM-DD format") from exc
+        return v
+
+    @model_validator(mode="after")
+    def validate_date_order(self):
+        start_date = datetime.strptime(self.start, "%Y-%m-%d")
+        end_date = datetime.strptime(self.end, "%Y-%m-%d")
+        if start_date > end_date:
+            raise ValueError("close_date_range.start must be on or before close_date_range.end")
+        return self
 
 
 class SalesforceQueryConfig(BaseModel):
@@ -21,6 +36,12 @@ class SalesforceQueryConfig(BaseModel):
     exclude_if_omitted_field: Optional[str] = "Omitted_from_Demo__c"
     close_date_range: DateRange
     limit: int = 100
+
+    @model_validator(mode="after")
+    def validate_limits(self):
+        if self.limit <= 0:
+            raise ValueError("salesforce.query.limit must be greater than 0")
+        return self
 
 
 class SalesforceConfig(BaseModel):
@@ -42,10 +63,30 @@ class MeetingsConfig(BaseModel):
     future_max: int = 3
     duration_minutes: List[int] = Field(default_factory=lambda: [25, 30, 45, 60])
 
+    @model_validator(mode="after")
+    def validate_meeting_bounds(self):
+        if self.past_min < 0 or self.past_max < 0 or self.future_min < 0 or self.future_max < 0:
+            raise ValueError("meeting min/max values must be non-negative")
+        if self.past_min > self.past_max:
+            raise ValueError("meetings.past_min must be <= meetings.past_max")
+        if self.future_min > self.future_max:
+            raise ValueError("meetings.future_min must be <= meetings.future_max")
+        if not self.duration_minutes or any(d <= 0 for d in self.duration_minutes):
+            raise ValueError("meetings.duration_minutes must contain positive values")
+        return self
+
 
 class EmailsConfig(BaseModel):
     min: int = 5
     max: int = 20
+
+    @model_validator(mode="after")
+    def validate_email_bounds(self):
+        if self.min < 0 or self.max < 0:
+            raise ValueError("emails.min and emails.max must be non-negative")
+        if self.min > self.max:
+            raise ValueError("emails.min must be <= emails.max")
+        return self
 
 
 class ActivityConfig(BaseModel):
@@ -57,6 +98,14 @@ class ActivityConfig(BaseModel):
         default_factory=lambda: ["Champion", "Economic Buyer", "Technical Buyer", "Influencer"]
     )
     realism_level: Literal["none", "light", "heavy"] = "light"
+
+    @model_validator(mode="after")
+    def validate_activity_config(self):
+        if self.past_days < 0 or self.future_days < 0:
+            raise ValueError("activity.past_days and activity.future_days must be non-negative")
+        if not self.participant_roles:
+            raise ValueError("activity.participant_roles must not be empty")
+        return self
 
 
 class LLMConfig(BaseModel):
@@ -73,6 +122,12 @@ class ScorecardsConfig(BaseModel):
     confidence_floor: float = 0.55
     mode: Literal["heuristic", "llm", "hybrid"] = "hybrid"
 
+    @model_validator(mode="after")
+    def validate_templates(self):
+        if not self.templates:
+            raise ValueError("scorecards.templates must not be empty")
+        return self
+
 
 class RunConfig(BaseModel):
     name: str = "se-demo-pack"
@@ -80,6 +135,13 @@ class RunConfig(BaseModel):
     idempotency_mode: Literal["tag", "external_state"] = "external_state"
     run_tag_field: Optional[str] = "Demo_Run_Id__c"
     dry_run: bool = False
+
+    @model_validator(mode="after")
+    def validate_idempotency(self):
+        if self.idempotency_mode == "tag":
+            if not self.run_tag_field or not self.run_tag_field.strip():
+                raise ValueError("run.run_tag_field is required when idempotency_mode is 'tag'")
+        return self
 
 
 class DemoGenConfig(BaseModel):

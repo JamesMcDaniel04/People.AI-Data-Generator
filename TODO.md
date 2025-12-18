@@ -5,10 +5,10 @@ This file tracks potential improvements and features for future versions.
 ## High Priority (Next Sprint)
 
 - [ ] **Add progress bars** - Show real-time progress during runs (rich.progress)
-- [ ] **Implement true parallelization** - Use ThreadPoolExecutor for concurrent API calls
+- [x] **Implement true parallelization** - Use ThreadPoolExecutor for concurrent API calls
 - [ ] **People.ai API integration** - Verify activities are ingested (if API available)
 - [ ] **Better error recovery** - Retry logic for transient failures
-- [ ] **Complete reset command** - Full cleanup implementation for tag mode
+- [x] **Complete reset command** - Full cleanup implementation for tag mode
 
 ## Medium Priority (Next Month)
 

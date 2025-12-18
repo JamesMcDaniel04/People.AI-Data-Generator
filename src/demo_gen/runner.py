@@ -1,11 +1,16 @@
 """Main orchestration runner for demo-gen"""
 
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+import yaml
 
 from demo_gen.activity_planner import ActivityPlanner
-from demo_gen.config import ResolvedConfig
+from demo_gen.config import DemoGenConfig, ResolvedConfig
 from demo_gen.content_gen import ContentGenerator
 from demo_gen.logger import DemoGenLogger, DryRunLogger
 from demo_gen.scorecard_client import ScorecardClient
@@ -27,6 +32,10 @@ class DemoGenRunner:
         self.max_opps = max_opps
 
         is_dry_run = config.config.run.dry_run
+        self._dry_run = is_dry_run
+        self._tag_mode = config.config.run.idempotency_mode == "tag"
+        self._run_tag_field = config.config.run.run_tag_field if self._tag_mode else None
+        self._thread_local = threading.local()
 
         if is_dry_run:
             self.logger = DryRunLogger(config.run_id, config.run_dir)
@@ -64,8 +73,21 @@ class DemoGenRunner:
 
             self.logger.set_stat("opps_selected", len(opportunities))
 
-            for opp in opportunities:
-                self._process_opportunity(opp)
+            if self.concurrency > 1 and len(opportunities) > 1:
+                with ThreadPoolExecutor(max_workers=self.concurrency) as executor:
+                    futures = [executor.submit(self._process_opportunity, opp) for opp in opportunities]
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            self.logger.log_error(
+                                stage="opportunity_processing",
+                                error=str(e),
+                                retryable=False,
+                            )
+            else:
+                for opp in opportunities:
+                    self._process_opportunity(opp)
 
             stats = self.logger.finalize(status="completed")
             return stats
@@ -76,6 +98,9 @@ class DemoGenRunner:
             )
             self.logger.finalize(status="failed")
             raise
+        finally:
+            if self.state_store:
+                self.state_store.close()
 
     def _select_opportunities(self) -> List[Dict[str, Any]]:
         """Query and select opportunities"""
@@ -83,11 +108,27 @@ class DemoGenRunner:
 
         if len(opportunities) > self.max_opps:
             opportunities = opportunities[: self.max_opps]
+            self.logger.log_event(
+                "opportunity_truncated",
+                reason="max_opps_limit",
+                limit=self.max_opps,
+            )
 
         for opp in opportunities:
             self.logger.log_event("opportunity_selected", opportunity_id=opp["Id"])
 
         return opportunities
+
+    def _get_sf_client(self) -> SalesforceClient:
+        """Get a thread-local Salesforce client for concurrent processing"""
+        if self.concurrency <= 1:
+            return self.sf_client
+
+        client = getattr(self._thread_local, "sf_client", None)
+        if client is None:
+            client = SalesforceClient(self.config.config.salesforce, dry_run=self._dry_run)
+            self._thread_local.sf_client = client
+        return client
 
     def _process_opportunity(self, opportunity: Dict[str, Any]) -> None:
         """Process a single opportunity: create activities and scorecards"""
@@ -103,7 +144,6 @@ class DemoGenRunner:
                 return
 
             self._create_activities(opportunity)
-
             self._create_scorecards(opportunity)
 
             if self.state_store:
@@ -143,6 +183,12 @@ class DemoGenRunner:
             meeting.start_datetime,
             meeting.subject,
         ):
+            self.logger.log_event(
+                "meeting_skipped",
+                opportunity_id=opp_id,
+                when=meeting.when,
+                reason="already_created",
+            )
             return
 
         description = None
@@ -155,14 +201,27 @@ class DemoGenRunner:
                 when=meeting.when,
             )
 
-        activity_id = self.sf_client.create_event(
-            subject=meeting.subject,
-            start_datetime=meeting.start_datetime,
-            duration_minutes=meeting.duration_minutes,
-            related_to_id=opp_id,
-            owner_id=opportunity.get("OwnerId"),
-            description=description,
-        )
+        sf_client = self._get_sf_client()
+        try:
+            activity_id = sf_client.create_event(
+                subject=meeting.subject,
+                start_datetime=meeting.start_datetime,
+                duration_minutes=meeting.duration_minutes,
+                related_to_id=opp_id,
+                owner_id=opportunity.get("OwnerId"),
+                description=description,
+                run_id=self.config.run_id if self._tag_mode else None,
+                tag_field=self._run_tag_field if self._tag_mode else None,
+            )
+        except Exception as e:
+            self.logger.log_error(
+                stage="meeting_creation",
+                error=str(e),
+                opportunity_id=opp_id,
+                retryable=False,
+                when=meeting.when,
+            )
+            return
 
         self.logger.log_event(
             "meeting_created",
@@ -195,6 +254,12 @@ class DemoGenRunner:
             email.activity_date,
             email.subject,
         ):
+            self.logger.log_event(
+                "email_skipped",
+                opportunity_id=opp_id,
+                when=email.when,
+                reason="already_created",
+            )
             return
 
         description = None
@@ -206,14 +271,27 @@ class DemoGenRunner:
                 when=email.when,
             )
 
-        activity_id = self.sf_client.create_task(
-            subject=email.subject,
-            activity_date=email.activity_date,
-            related_to_id=opp_id,
-            owner_id=opportunity.get("OwnerId"),
-            description=description,
-            task_subtype="Email",
-        )
+        sf_client = self._get_sf_client()
+        try:
+            activity_id = sf_client.create_task(
+                subject=email.subject,
+                activity_date=email.activity_date,
+                related_to_id=opp_id,
+                owner_id=opportunity.get("OwnerId"),
+                description=description,
+                task_subtype="Email",
+                run_id=self.config.run_id if self._tag_mode else None,
+                tag_field=self._run_tag_field if self._tag_mode else None,
+            )
+        except Exception as e:
+            self.logger.log_error(
+                stage="email_creation",
+                error=str(e),
+                opportunity_id=opp_id,
+                retryable=False,
+                when=email.when,
+            )
+            return
 
         self.logger.log_event(
             "email_created",
@@ -242,14 +320,30 @@ class DemoGenRunner:
             if self.state_store and self.state_store.has_scorecard(
                 self.config.run_id, opp_id, template_name
             ):
+                self.logger.log_event(
+                    "scorecard_skipped",
+                    opportunity_id=opp_id,
+                    template=template_name,
+                    reason="already_created",
+                )
                 continue
 
-            scorecard_data = self.scorecard_client.upsert_scorecard(
-                opportunity_id=opp_id,
-                template_name=template_name,
-                opportunity=opportunity,
-                seed=self.config.config.run.seed,
-            )
+            try:
+                scorecard_data = self.scorecard_client.upsert_scorecard(
+                    opportunity_id=opp_id,
+                    template_name=template_name,
+                    opportunity=opportunity,
+                    seed=self.config.config.run.seed,
+                )
+            except Exception as e:
+                self.logger.log_error(
+                    stage="scorecard_generation",
+                    error=str(e),
+                    opportunity_id=opp_id,
+                    retryable=False,
+                    template=template_name,
+                )
+                continue
 
             scorecard_id = scorecard_data["scorecard_id"]
 
@@ -295,7 +389,8 @@ class DemoGenRunner:
 
     def smoke_test(self, opp_id: str) -> Dict[str, Any]:
         """Run a smoke test on a single opportunity"""
-        opportunities = self.sf_client.query_opportunities()
+        sf_client = self._get_sf_client()
+        opportunities = sf_client.query_opportunities()
 
         target_opp = None
         for opp in opportunities:
@@ -315,7 +410,7 @@ class DemoGenRunner:
         email_id = None
 
         if meeting:
-            meeting_id = self.sf_client.create_event(
+            meeting_id = sf_client.create_event(
                 subject=meeting.subject,
                 start_datetime=meeting.start_datetime,
                 duration_minutes=meeting.duration_minutes,
@@ -324,7 +419,7 @@ class DemoGenRunner:
             )
 
         if email:
-            email_id = self.sf_client.create_task(
+            email_id = sf_client.create_task(
                 subject=email.subject,
                 activity_date=email.activity_date,
                 related_to_id=opp_id,
@@ -350,14 +445,71 @@ class DemoGenRunner:
         }
 
     @staticmethod
-    def cleanup_run(run_dir: Path) -> None:
-        """Best-effort cleanup of a run (tag-based idempotency only)"""
-        state_db = run_dir / "state.sqlite"
+    def cleanup_run(run_dir: Path) -> Dict[str, int]:
+        """Best-effort cleanup of a run"""
+        run_file = run_dir / "run.json"
+        config_file = run_dir / "config.resolved.yaml"
 
-        if not state_db.exists():
-            raise ValueError(
-                "Cannot cleanup run: state.sqlite not found. "
-                "Cleanup only works with external_state idempotency mode."
-            )
+        if not run_file.exists():
+            raise ValueError(f"Cannot cleanup run: {run_file} not found")
+        if not config_file.exists():
+            raise ValueError(f"Cannot cleanup run: {config_file} not found")
 
-        print(f"Cleanup not yet implemented. State file: {state_db}")
+        with open(run_file) as f:
+            run_metadata = json.load(f)
+        run_id = run_metadata.get("run_id")
+        if not run_id:
+            raise ValueError("Cannot cleanup run: run_id missing from run.json")
+
+        with open(config_file) as f:
+            resolved_config = yaml.safe_load(f)
+        config_payload = resolved_config.get("config") if resolved_config else None
+        if not config_payload:
+            raise ValueError("Cannot cleanup run: resolved config missing 'config' section")
+
+        config = DemoGenConfig(**config_payload)
+        sf_client = SalesforceClient(config.salesforce, dry_run=False)
+
+        deleted_events = 0
+        deleted_tasks = 0
+
+        if config.run.idempotency_mode == "tag":
+            tag_field = config.run.run_tag_field
+            if not tag_field:
+                raise ValueError("Cannot cleanup run: run_tag_field not configured")
+
+            deleted_events = sf_client.delete_records_by_run_id("Event", tag_field, run_id)
+            deleted_tasks = sf_client.delete_records_by_run_id("Task", tag_field, run_id)
+        else:
+            state_db = run_dir / "state.sqlite"
+            if not state_db.exists():
+                raise ValueError(
+                    "Cannot cleanup run: state.sqlite not found. "
+                    "Cleanup requires tag mode or external_state with state.sqlite."
+                )
+
+            state_store = StateStore(state_db)
+            activities = state_store.get_run_activities(run_id)
+
+            for activity_id, activity_type in activities:
+                object_name = None
+                if activity_type == "meeting":
+                    object_name = "Event"
+                elif activity_type == "email":
+                    object_name = "Task"
+
+                if not object_name:
+                    continue
+
+                try:
+                    sf_client.delete_record(object_name, activity_id)
+                    if object_name == "Event":
+                        deleted_events += 1
+                    else:
+                        deleted_tasks += 1
+                except Exception:
+                    continue
+
+            state_store.close()
+
+        return {"Event": deleted_events, "Task": deleted_tasks}

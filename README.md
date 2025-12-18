@@ -138,7 +138,7 @@ demo-gen status --run-id run-8f3a
 demo-gen smoke -c demo.yaml --opp-id 006...
 ```
 
-**Reset/cleanup a run (tag mode only):**
+**Reset/cleanup a run (tag mode or external_state with state.sqlite):**
 ```bash
 demo-gen reset --run-id run-8f3a
 ```
@@ -249,7 +249,7 @@ run:
 ```
 
 - **Pros:** Works with any Salesforce org, no custom fields needed
-- **Cons:** Cleanup/reset is limited
+- **Cons:** Cleanup/reset only deletes Events/Tasks tracked in state.sqlite
 
 ### Tag-Based
 
@@ -261,7 +261,7 @@ run:
   run_tag_field: "Demo_Run_Id__c"
 ```
 
-- **Pros:** Enables full cleanup via `reset` command
+- **Pros:** Enables cleanup of tagged Events/Tasks via `reset` command
 - **Cons:** Requires custom field on Activity objects
 
 ## Troubleshooting

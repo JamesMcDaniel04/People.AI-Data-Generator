@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import click
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
@@ -18,7 +19,7 @@ console = Console()
 @click.version_option(version="0.1.0")
 def main():
     """Demo data generator for People.ai - Create realistic demo environments on demand"""
-    pass
+    load_dotenv()
 
 
 @main.command()
@@ -161,7 +162,7 @@ def status(run_id, log_dir):
 )
 @click.confirmation_option(prompt="Are you sure you want to delete records created by this run?")
 def reset(run_id, log_dir):
-    """Delete records created by a specific run (requires tag-based idempotency)"""
+    """Delete records created by a specific run (tag or external_state)"""
     try:
         run_dir = _find_run_dir(log_dir, run_id)
 
@@ -173,7 +174,15 @@ def reset(run_id, log_dir):
 
         from demo_gen.runner import DemoGenRunner
 
-        DemoGenRunner.cleanup_run(run_dir)
+        result = DemoGenRunner.cleanup_run(run_dir)
+
+        if result:
+            table = Table(title="Cleanup Results")
+            table.add_column("Object", style="cyan")
+            table.add_column("Deleted", style="magenta")
+            for object_name, count in result.items():
+                table.add_row(object_name, str(count))
+            console.print(table)
 
         console.print(f"[bold green]Run {run_id} has been reset[/bold green]")
 

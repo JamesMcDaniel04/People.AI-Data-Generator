@@ -182,13 +182,12 @@ Before first production use:
 
 ## Known Limitations (MVP)
 
-1. **No true parallelization** - Sequential for simplicity
-2. **No progress bars** - Silent during execution (check logs)
-3. **No People.ai API verification** - Manual check required
-4. **Limited error recovery** - Fails fast, check errors.jsonl
-5. **Reset incomplete** - Tag-based cleanup not fully implemented
-6. **Single scorecard template** - Only MEDDICC for now
-7. **No contact generation** - Uses existing contacts only
+1. **No progress bars** - Silent during execution (check logs)
+2. **No People.ai API verification** - Manual check required
+3. **Limited error recovery** - Fails fast, check errors.jsonl
+4. **Reset is best-effort** - Events/Tasks are cleaned; scorecards depend on storage
+5. **Single scorecard template** - Only MEDDICC for now
+6. **No contact generation** - Uses existing contacts only
 
 ## Next Steps for Production
 
@@ -200,17 +199,15 @@ Before first production use:
 
 ### Short Term (First 2 Weeks)
 1. Add progress bars (rich.progress)
-2. Implement true parallel execution
-3. Add more scorecard templates
-4. Improve error messages
-5. Add People.ai API verification
+2. Add more scorecard templates
+3. Improve error messages
+4. Add People.ai API verification
 
 ### Medium Term (Next Month)
 1. Web UI for configuration
 2. Scheduled runs (cron)
-3. Better cleanup/reset
-4. Multi-template support
-5. Custom subject configuration
+3. Multi-template support
+4. Custom subject configuration
 
 ## Success Criteria
 

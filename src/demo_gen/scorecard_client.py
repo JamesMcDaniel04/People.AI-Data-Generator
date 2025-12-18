@@ -113,6 +113,8 @@ class ScorecardClient:
 
         questions = template.get_questions()
         num_questions_to_answer = int(len(questions) * self.config.coverage_target)
+        if questions and self.config.coverage_target > 0 and num_questions_to_answer == 0:
+            num_questions_to_answer = 1
 
         questions_to_answer = rng.sample(questions, num_questions_to_answer)
 
@@ -141,6 +143,29 @@ class ScorecardClient:
                 "confidence": confidence,
             }
             answers.append(answer)
+
+        if not answers and questions_to_answer:
+            question = questions_to_answer[0]
+            confidence = max(self.config.confidence_floor, self._generate_confidence(rng))
+            answer_text = None
+            if self.config.mode in ["llm", "hybrid"] and self.content_generator:
+                answer_text = self.content_generator.generate_scorecard_answer(
+                    question=question["question"],
+                    opportunity_name=opportunity.get("Name", ""),
+                    stage=opportunity.get("StageName", ""),
+                )
+            if not answer_text and self.config.mode in ["heuristic", "hybrid"]:
+                answer_text = self._generate_heuristic_answer(question, rng)
+
+            answers.append(
+                {
+                    "question_id": question["id"],
+                    "question": question["question"],
+                    "category": question["category"],
+                    "answer": answer_text,
+                    "confidence": confidence,
+                }
+            )
 
         return answers
 
@@ -196,13 +221,13 @@ class ScorecardClient:
         options = heuristic_answers.get(category, ["Information being gathered"])
         return rng.choice(options)
 
-    def compute_score(self, answers: List[Dict[str, Any]]) -> float:
+    def compute_score(self, answers: List[Dict[str, Any]], total_questions: int) -> float:
         """Compute overall scorecard score"""
-        if not answers:
+        if not answers or total_questions <= 0:
             return 0.0
 
         avg_confidence = sum(a["confidence"] for a in answers) / len(answers)
-        coverage = len(answers) / 7  # Assuming 7 questions for MEDDICC
+        coverage = len(answers) / total_questions
 
         score = (avg_confidence * 0.7) + (coverage * 0.3)
         return round(score * 100, 1)
@@ -217,7 +242,8 @@ class ScorecardClient:
         """Create/update scorecard with populated answers"""
         scorecard_id = self.create_or_get_scorecard(opportunity_id, template_name)
         answers = self.populate_scorecard(scorecard_id, template_name, opportunity, seed)
-        score = self.compute_score(answers)
+        total_questions = len(self.templates[template_name].get_questions())
+        score = self.compute_score(answers, total_questions)
 
         return {
             "scorecard_id": scorecard_id,
@@ -225,5 +251,5 @@ class ScorecardClient:
             "opportunity_id": opportunity_id,
             "answers": answers,
             "score": score,
-            "coverage": len(answers) / len(self.templates[template_name].get_questions()),
+            "coverage": len(answers) / total_questions if total_questions else 0.0,
         }

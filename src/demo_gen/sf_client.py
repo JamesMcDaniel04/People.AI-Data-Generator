@@ -33,13 +33,32 @@ class SalesforceClient:
             )
 
         instance_url = self.config.instance_url.replace("https://", "").rstrip("/")
+        domain = self._resolve_login_domain(instance_url)
 
         self.sf = Salesforce(
             username=username,
             password=password,
             security_token=security_token,
-            domain=instance_url,
+            domain=domain,
         )
+
+    def _resolve_login_domain(self, instance_url: str) -> str:
+        """Resolve login domain from an instance URL"""
+        if instance_url.startswith("test.") or instance_url == "test.salesforce.com":
+            return "test"
+        if instance_url.endswith(".my.salesforce.com"):
+            return instance_url.split(".my.salesforce.com")[0]
+        return "login"
+
+    def _escape_soql(self, value: str) -> str:
+        """Escape a value for SOQL string literals"""
+        return value.replace("\\", "\\\\").replace("'", "\\'")
+
+    def _format_soql_date(self, value: str) -> str:
+        """Format a date string for SOQL"""
+        if value.startswith("'") and value.endswith("'"):
+            return value
+        return f"'{value}'"
 
     def query_opportunities(self) -> List[Dict[str, Any]]:
         """Query opportunities based on configuration criteria"""
@@ -52,11 +71,12 @@ class SalesforceClient:
 
         # Opportunity type filter
         if query_config.opportunity_type:
-            where_clauses.append(f"Type = '{query_config.opportunity_type}'")
+            opportunity_type = self._escape_soql(query_config.opportunity_type)
+            where_clauses.append(f"Type = '{opportunity_type}'")
 
         # Stage filter
         if query_config.stages_allowed:
-            stages = "', '".join(query_config.stages_allowed)
+            stages = "', '".join(self._escape_soql(stage) for stage in query_config.stages_allowed)
             where_clauses.append(f"StageName IN ('{stages}')")
 
         # Exclusion field
@@ -64,10 +84,9 @@ class SalesforceClient:
             where_clauses.append(f"{query_config.exclude_if_omitted_field} = false")
 
         # Close date range
-        where_clauses.append(
-            f"CloseDate >= {query_config.close_date_range.start} "
-            f"AND CloseDate <= {query_config.close_date_range.end}"
-        )
+        start_date = self._format_soql_date(query_config.close_date_range.start)
+        end_date = self._format_soql_date(query_config.close_date_range.end)
+        where_clauses.append(f"CloseDate >= {start_date} AND CloseDate <= {end_date}")
 
         where_clause = " AND ".join(where_clauses)
 
@@ -105,6 +124,8 @@ class SalesforceClient:
         related_to_id: str,
         owner_id: str,
         description: Optional[str] = None,
+        run_id: Optional[str] = None,
+        tag_field: Optional[str] = None,
     ) -> str:
         """Create a calendar event (meeting)"""
         if self.dry_run:
@@ -127,6 +148,8 @@ class SalesforceClient:
 
         if description:
             event_data["Description"] = description
+        if run_id and tag_field:
+            event_data[tag_field] = run_id
 
         result = self.sf.Event.create(event_data)
         return result["id"]
@@ -139,6 +162,8 @@ class SalesforceClient:
         owner_id: str,
         description: Optional[str] = None,
         task_subtype: str = "Email",
+        run_id: Optional[str] = None,
+        tag_field: Optional[str] = None,
     ) -> str:
         """Create a task (typically used for email activities)"""
         if self.dry_run:
@@ -155,6 +180,8 @@ class SalesforceClient:
 
         if description:
             task_data["Description"] = description
+        if run_id and tag_field:
+            task_data[tag_field] = run_id
 
         result = self.sf.Task.create(task_data)
         return result["id"]
@@ -199,7 +226,7 @@ class SalesforceClient:
             return 0
 
         soql = f"SELECT Id FROM {object_name} WHERE {tag_field} = '{run_id}'"
-        result = self.sf.query(soql)
+        result = self.sf.query_all(soql)
 
         deleted = 0
         obj = getattr(self.sf, object_name)
@@ -208,3 +235,11 @@ class SalesforceClient:
             deleted += 1
 
         return deleted
+
+    def delete_record(self, object_name: str, record_id: str) -> None:
+        """Delete a record by ID"""
+        if self.dry_run:
+            return
+
+        obj = getattr(self.sf, object_name)
+        obj.delete(record_id)

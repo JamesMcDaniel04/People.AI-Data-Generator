@@ -311,8 +311,8 @@ Replace or extend `ContentGenerator`:
 
 - Configurable via `--concurrency` flag
 - Default: 5 parallel API calls
-- Not fully implemented in MVP (sequential for now)
-- Future: ThreadPoolExecutor for activities
+- Implemented with ThreadPoolExecutor at opportunity level
+- Future: finer-grained concurrency for per-activity writes
 
 ### Rate Limiting
 
@@ -358,7 +358,6 @@ Minimal required:
 
 ### Phase 2
 
-- [ ] True parallel execution (ThreadPoolExecutor)
 - [ ] Progress bars (rich.progress)
 - [ ] People.ai API verification
 - [ ] More scorecard templates (BANT, MEDDPICC)

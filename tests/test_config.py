@@ -46,6 +46,30 @@ def test_config_validation_coverage():
         DemoGenConfig(**raw_config)
 
 
+def test_config_validation_tag_requires_field():
+    """Test that tag mode requires run_tag_field"""
+    with open(Path(__file__).parent.parent / "demo.example.yaml") as f:
+        raw_config = yaml.safe_load(f)
+
+    raw_config["run"]["idempotency_mode"] = "tag"
+    raw_config["run"]["run_tag_field"] = ""
+
+    with pytest.raises(ValueError, match="run.run_tag_field is required"):
+        DemoGenConfig(**raw_config)
+
+
+def test_config_validation_date_range_order():
+    """Test that close_date_range start must be before end"""
+    with open(Path(__file__).parent.parent / "demo.example.yaml") as f:
+        raw_config = yaml.safe_load(f)
+
+    raw_config["salesforce"]["query"]["close_date_range"]["start"] = "2025-12-31"
+    raw_config["salesforce"]["query"]["close_date_range"]["end"] = "2025-10-01"
+
+    with pytest.raises(ValueError, match="close_date_range.start must be on or before"):
+        DemoGenConfig(**raw_config)
+
+
 def test_resolved_config_run_id():
     """Test that resolved config generates unique run IDs"""
     config_path = Path(__file__).parent.parent / "demo.example.yaml"
