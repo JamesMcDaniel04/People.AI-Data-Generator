@@ -1,0 +1,59 @@
+run:
+  name: "se-demo-pack"
+  seed: 42
+  idempotency_mode: "external_state"  # tag | external_state
+  run_tag_field: "Demo_Run_Id__c"     # if using tag mode
+  dry_run: false
+
+salesforce:
+  instance_url: "https://your-instance.my.salesforce.com"
+  auth: "oauth"
+  query:
+    opportunity_type: "New Business"
+    stages_allowed:
+      - "Discovery"
+      - "Evaluation"
+      - "Negotiation"
+    exclude_if_omitted_field: "Omitted_from_Demo__c"
+    close_date_range:
+      start: "2025-10-01"
+      end: "2025-12-31"
+    limit: 100
+
+peopleai:
+  ingestion_mode: "crm_activity"  # crm_activity | email_dropbox | calendar
+  verify_mode: "manual"           # manual | api
+  expected_latency_minutes: 60
+
+activity:
+  past_days: 45
+  future_days: 21
+  meetings:
+    past_min: 3
+    past_max: 8
+    future_min: 1
+    future_max: 3
+    duration_minutes: [25, 30, 45, 60]
+  emails:
+    min: 5
+    max: 20
+  participant_roles:
+    - "Champion"
+    - "Economic Buyer"
+    - "Technical Buyer"
+    - "Influencer"
+  realism_level: "light"  # none | light | heavy
+
+llm:
+  provider: "openai"           # openai | azure_openai
+  model: "gpt-4o-mini"
+  temperature: 0.4
+  max_tokens: 500
+  enabled: true
+
+scorecards:
+  templates:
+    - "MEDDICC"
+  coverage_target: 0.8
+  confidence_floor: 0.55
+  mode: "hybrid"  # heuristic | llm | hybrid
